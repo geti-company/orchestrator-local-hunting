@@ -51,4 +51,8 @@ module.exports = {
     registerPod: body => request('POST', '/orchestrator/pod-register', {body}),
 
     updatePod: (id, body) => request('PATCH', `/orchestrator/pods/${id}`, {body}),
+
+    // reemplaza el mapa `categories` completo del load (misma ruta que usa orchestrator-hunting)
+    updateLoadCategories: (loadId, categories) =>
+        request('PATCH', `/orchestrator/loads/${loadId}/categories`, {body: {categories}}),
 };

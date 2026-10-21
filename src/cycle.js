@@ -5,7 +5,6 @@ const api = require('./hunting-api');
 const vm = require('./vm-executor');
 const templates = require('./templates');
 
-const STEPS = ['POSITION', 'PRICING'];
 const STATUS_KEY = {POSITION: 'position_status', PRICING: 'pricing_status'};
 
 // hora de Chile en formato HH:MM, independiente de la zona del equipo
@@ -16,11 +15,40 @@ const chileTime = () => new Intl.DateTimeFormat('en-GB', {
 const isAfterEndTime = () => chileTime() >= config.endTime;
 
 /**
- * Revisa el pod pendiente del paso: si ya terminó, informa success/error a api-hunting.
- * orchestrator-hunting lee ese estado y marca position_status/pricing_status del load.
+ * Marca el paso como OK en las categorías RUNNING de cada load que la corrida cubrió:
+ * - position: solo las categorías con que se lanzó (CATEGORIES del proceso). Un load creado
+ *   mientras corría no queda marcado y se procesa en una corrida siguiente.
+ * - pricing: no filtra por categoría (procesa todo lo extraído ese día), así que solo las que ya
+ *   tenían position OK.
+ * orchestrator-hunting no escribe `categories` mientras espera a un pivote local: no se pisan.
  */
-const checkPendingPod = async (template, pod) => {
-    const status = await vm.getStatus(template.vm, pod.name);
+const markStepOk = async (loads, step, launchedCategories) => {
+    const covered = (id, entry) => step === 'POSITION'
+        ? (launchedCategories ?? []).includes(`${id}`)
+        : entry.position_status === 'OK';
+
+    for (const load of loads) {
+        const categories = {...(load.categories ?? {})};
+        let changed = false;
+        for (const [id, entry] of Object.entries(categories)) {
+            if (entry?.status === 'RUNNING' && entry[STATUS_KEY[step]] !== 'OK' && covered(id, entry)) {
+                categories[id] = {...entry, [STATUS_KEY[step]]: 'OK'};
+                changed = true;
+            }
+        }
+        if (changed) {
+            await api.updateLoadCategories(load.load_id, categories);
+            logger.info(`load ${load.load_id}: ${STATUS_KEY[step]} = OK`);
+        }
+    }
+};
+
+/**
+ * Revisa el pod pendiente del paso. Si terminó bien: pod success y el paso OK en los loads.
+ * Si falló o desapareció: pod error, y en el ciclo siguiente se relanza.
+ */
+const checkPendingPod = async (template, pod, step, loads) => {
+    const {status, categories} = await vm.getProcess(template.vm, pod.name);
     if (status === 'RUNNING') {
         logger.info(`${pod.name} sigue corriendo`);
         return;
@@ -28,6 +56,7 @@ const checkPendingPod = async (template, pod) => {
     const result = status === 'OK' ? 'success' : 'error';
     await api.updatePod(pod.id, {status: result, active: false});
     logger.info(`${pod.name} terminó (${status}) -> pod ${result}`);
+    if (result === 'success') await markStepOk(loads, step, categories);
 };
 
 const launchStep = async (pivotRetailId, launch, template, step, categoryIds) => {
@@ -89,12 +118,15 @@ const processPivot = async (pivotRetailId, loads) => {
 
     const running = loads.flatMap(load => Object.entries(load.categories ?? {}))
         .filter(([, entry]) => entry?.status === 'RUNNING');
-    const step = STEPS.find(s => running.some(([, entry]) => entry[STATUS_KEY[s]] !== 'OK'));
+    // pricing primero: tiene que correr el mismo día que el position que ya terminó
+    const needsPricing = running.some(([, entry]) => entry.position_status === 'OK' && entry.pricing_status !== 'OK');
+    const needsPosition = running.some(([, entry]) => entry.position_status !== 'OK');
+    const step = needsPricing ? 'PRICING' : needsPosition ? 'POSITION' : null;
     if (!step) return;
 
     const pod = await api.getPendingPod(pivotRetailId, step);
     if (pod) {
-        await checkPendingPod(template, pod);
+        await checkPendingPod(template, pod, step, loads);
         return;
     }
 

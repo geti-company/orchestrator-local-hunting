@@ -9,12 +9,16 @@ Diseño: PROJ-024 RN-P024-009, ADR-P024-011 y SEQ-P024-008 (repo `documentacion`
 ## Cómo encaja
 
 ```
-orchestrator-hunting (GCP)                     orchestrator-local-hunting (máquina local)
-  - extiende la vigencia de las categorías       - toma los loads pendientes con pivote local-*
-  - pivote con plantilla local-*: no lanza       - lanza position y luego pricing en la VM (pm2)
-  - lee el estado desde la tabla pods     <----  - registra/actualiza los pods en api-hunting
-  - complete-extraction cuando ambos OK
+orchestrator-hunting (GCP)                      orchestrator-local-hunting (máquina local)
+  - extiende la vigencia de las categorías        - toma los loads pendientes con pivote local-*
+  - pivote con plantilla local-*: no lanza,       - lanza position y luego pricing en la VM (pm2)
+    no escribe categories, espera la fecha        - registra/actualiza los pods en api-hunting
+    límite (creación + 3 días hábiles)     <----  - al terminar cada robot, marca position_status /
+  - con ambos OK: complete-extraction               pricing_status = OK en categories del load
 ```
+
+`orchestrator-hunting` no lee el estado desde `pods`: `GET /orchestrator/pods` no filtra por fecha y
+devolvería cualquier pod exitoso histórico del retail. Por eso el resultado se informa en `categories`.
 
 Un **pivote local** es el que tiene su plantilla `POSITION` en `launchs` con `cluster` que empieza con
 `local-`. Si la plantilla es de GCP o no existe, este orquestador no hace nada con ese pivote.
@@ -23,9 +27,12 @@ Un **pivote local** es el que tiene su plantilla `POSITION` en `launchs` con `cl
 
 1. `GET /orchestrator/loads/pending-extraction` y agrupa los loads por `pivot_retail_id`.
 2. Para cada pivote con plantilla `local-*` y plantilla definida en `src/templates.js`:
-   - Paso pendiente: `POSITION` si alguna categoría `RUNNING` no tiene `position_status = OK`; si no, `PRICING`.
+   - Paso pendiente: `PRICING` si alguna categoría `RUNNING` tiene position OK y pricing no (va primero
+     porque tiene que correr el mismo día que position); si no, `POSITION` si alguna no tiene position OK.
    - Si hay un pod `pending` de ese paso: consulta `pm2 jlist` en la VM; si terminó, `PATCH` del pod a
-     `success` o `error`. `orchestrator-hunting` lo lee y marca el estado del load.
+     `success` o `error`. Si fue `success`, marca el paso `OK` en `categories` de los loads cubiertos
+     (`PATCH /orchestrator/loads/:id/categories`): para position, solo las categorías con que se lanzó;
+     para pricing, las que ya tenían position OK.
    - Si no hay pod: después de `END_TIME` (Chile) no lanza; si en la VM ya corre la misma extracción,
      espera; si no, registra el pod (`pending`) y lanza `getilaunch` con `CLIENT_ID`, `FROM_HOURS=00` y,
      para position, `CATEGORIES` con las categorías de los loads.

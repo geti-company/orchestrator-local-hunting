@@ -70,6 +70,8 @@ const getVmProcesses = async vm => {
         exitCode: proc.pm2_env?.exit_code,
         args: [].concat(proc.pm2_env?.args ?? []).join(' '),
         env: Object.fromEntries(EXTRACTION_KEYS.map(key => [key, getProcEnv(proc, key)])),
+        // categorías con las que se lanzó position: al terminar se marcan solo esas
+        categories: getProcEnv(proc, 'CATEGORIES'),
     }]));
 };
 
@@ -80,8 +82,12 @@ const procStatus = proc => {
     return 'RUNNING';
 };
 
-// 'OK' | 'FAILED' | 'RUNNING' | 'NOT_FOUND'
-const getStatus = async (vm, name) => procStatus((await getVmProcesses(vm)).get(name));
+// status: 'OK' | 'FAILED' | 'RUNNING' | 'NOT_FOUND'; categories: CATEGORIES con que se lanzó (si tiene)
+const getProcess = async (vm, name) => {
+    const proc = (await getVmProcesses(vm)).get(name);
+    const categories = proc?.categories ? `${proc.categories}`.split(',').map(id => id.trim()).filter(Boolean) : undefined;
+    return {status: procStatus(proc), categories};
+};
 
 // nombre de un proceso que ya corre la misma extracción (lo haya lanzado quien sea); undefined si no hay
 const findRunningExtraction = async (vm, template) => {
@@ -93,4 +99,4 @@ const findRunningExtraction = async (vm, template) => {
     return undefined;
 };
 
-module.exports = {start, getStatus, findRunningExtraction};
+module.exports = {start, getProcess, findRunningExtraction};
