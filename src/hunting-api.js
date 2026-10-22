@@ -44,6 +44,14 @@ module.exports = {
     getLaunch: async (retailId, launchType) =>
         firstOrNull((await request('GET', '/orchestrator/launch', {query: {retail_id: retailId, launch_type: launchType}}))?.data),
 
+    // pod pendiente del retail y tipo (sin filtro de fecha: un pod puede cruzar la medianoche)
+    getPendingPod: async (retailId, launchType) =>
+        firstOrNull((await request('GET', '/orchestrator/pods', {query: {retail_id: retailId, launch_type: launchType, status: 'pending', active: true}}))?.data),
+
+    registerPod: body => request('POST', '/orchestrator/pod-register', {body}),
+
+    updatePod: (id, body) => request('PATCH', `/orchestrator/pods/${id}`, {body}),
+
     // reemplaza el mapa `categories` completo del load (misma ruta que usa orchestrator-hunting)
     updateLoadCategories: (loadId, categories) =>
         request('PATCH', `/orchestrator/loads/${loadId}/categories`, {body: {categories}}),

@@ -1,51 +1,109 @@
+const {randomUUID} = require('crypto');
 const config = require('./config');
 const logger = require('./logger');
 const api = require('./hunting-api');
 const vm = require('./vm-executor');
 const templates = require('./templates');
 
-// fecha de Chile (YYYY-MM-DD) de un instante, independiente de la zona del equipo
-const chileDate = ms => new Intl.DateTimeFormat('en-CA', {timeZone: config.timezone}).format(new Date(ms));
+const STATUS_KEY = {POSITION: 'position_status', PRICING: 'pricing_status'};
 
-const ranToday = proc => proc.startedAt != null && chileDate(proc.startedAt) === chileDate(Date.now());
+// hora de Chile en formato HH:MM, independiente de la zona del equipo
+const chileTime = () => new Intl.DateTimeFormat('en-GB', {
+    timeZone: config.timezone, hour: '2-digit', minute: '2-digit', hour12: false,
+}).format(new Date());
 
-const hasRunningCategories = load => Object.values(load.categories ?? {}).some(entry => entry?.status === 'RUNNING');
+const isAfterEndTime = () => chileTime() >= config.endTime;
 
 /**
- * Marca `key` (position_status | pricing_status) en OK en las categorías RUNNING del load.
+ * Marca el paso como OK en las categorías RUNNING de cada load que la corrida cubrió:
+ * - position: solo las categorías con que se lanzó (CATEGORIES del proceso). Un load creado
+ *   mientras corría no queda marcado y se procesa en una corrida siguiente.
+ * - pricing: no filtra por categoría (procesa todo lo extraído ese día), así que solo las que ya
+ *   tenían position OK.
  * orchestrator-hunting no escribe `categories` mientras espera a un pivote local: no se pisan.
  */
-const markOk = async (load, key) => {
-    const categories = {...(load.categories ?? {})};
-    let changed = false;
-    for (const [id, entry] of Object.entries(categories)) {
-        if (entry?.status === 'RUNNING' && entry[key] !== 'OK') {
-            categories[id] = {...entry, [key]: 'OK'};
-            changed = true;
+const markStepOk = async (loads, step, launchedCategories) => {
+    const covered = (id, entry) => step === 'POSITION'
+        ? (launchedCategories ?? []).includes(`${id}`)
+        : entry.position_status === 'OK';
+
+    for (const load of loads) {
+        const categories = {...(load.categories ?? {})};
+        let changed = false;
+        for (const [id, entry] of Object.entries(categories)) {
+            if (entry?.status === 'RUNNING' && entry[STATUS_KEY[step]] !== 'OK' && covered(id, entry)) {
+                categories[id] = {...entry, [STATUS_KEY[step]]: 'OK'};
+                changed = true;
+            }
+        }
+        if (changed) {
+            await api.updateLoadCategories(load.load_id, categories);
+            logger.info(`load ${load.load_id}: ${STATUS_KEY[step]} = OK`);
         }
     }
-    if (!changed) return;
-
-    await api.updateLoadCategories(load.load_id, categories);
-    load.categories = categories;
-    logger.info(`load ${load.load_id}: ${key} = OK`);
-};
-
-// Si el proceso no está listo, deja el motivo en el log y devuelve false.
-const isDone = (pivotRetailId, name, proc) => {
-    if (proc.status === 'OK') return true;
-    if (proc.status === 'FAILED') logger.warn(`retail ${pivotRetailId}: ${name} terminó con error hoy`);
-    else if (proc.status === 'RUNNING') logger.info(`retail ${pivotRetailId}: ${name} sigue corriendo`);
-    else logger.info(`retail ${pivotRetailId}: ${name} no ha corrido hoy`);
-    return false;
 };
 
 /**
- * crons lanza una vez al día position y después add position (pricing) del pivote, sin CATEGORIES:
- * position toma las categorías del cliente genérico vigentes al arrancar. Por eso cubre los loads
- * creados antes de su inicio; uno creado después espera a la corrida del día siguiente.
- * Pricing (ADD_POSITION_EXTERNAL) procesa lo extraído ese día, así que tiene que haber arrancado
- * después que el position del mismo día.
+ * Revisa el pod pendiente del paso. Si terminó bien: pod success y el paso OK en los loads.
+ * Si falló o desapareció: pod error, y en el ciclo siguiente se relanza.
+ */
+const checkPendingPod = async (template, pod, step, loads) => {
+    const {status, categories} = await vm.getProcess(template.vm, pod.name);
+    if (status === 'RUNNING') {
+        logger.info(`${pod.name} sigue corriendo`);
+        return;
+    }
+    const result = status === 'OK' ? 'success' : 'error';
+    await api.updatePod(pod.id, {status: result, active: false});
+    logger.info(`${pod.name} terminó (${status}) -> pod ${result}`);
+    if (result === 'success') await markStepOk(loads, step, categories);
+};
+
+const launchStep = async (pivotRetailId, launch, template, step, categoryIds) => {
+    if (isAfterEndTime()) {
+        logger.info(`retail ${pivotRetailId}: después de ${config.endTime} (Chile) no se lanza ${step}`);
+        return;
+    }
+    // robot-pricing-2 (ADD_POSITION_EXTERNAL) procesa solo lo extraído ese mismo día.
+    // TODO: si position terminó otro día, pricing no encontrará nada; definir cómo rehacer position (ver README).
+
+    const running = await vm.findRunningExtraction(template.vm, template[step]);
+    if (running) {
+        logger.info(`retail ${pivotRetailId}: ya corre ${running} con la misma extracción, se espera`);
+        return;
+    }
+
+    const name = `orch-hunt-${step.toLowerCase()}-${launch.retail_name}-${randomUUID().slice(0, 8)}`;
+    // se registra antes de lanzar: si el lanzamiento falla, el pod queda en error y se reintenta en el ciclo siguiente
+    const registered = await api.registerPod({
+        code: randomUUID(),
+        retail_id: pivotRetailId,
+        name,
+        active: true,
+        cluster: `local-${template.vm}`,
+        zone: null,
+        namespace: 'pm2',
+        status: 'pending',
+        launch_type: step,
+    });
+    const podId = registered?.data?.id ?? registered?.id;
+
+    const extraEnv = {
+        CLIENT_ID: config.huntingClientId,
+        FROM_HOURS: '00',
+        ...(step === 'POSITION' ? {CATEGORIES: categoryIds.join(',')} : {}),
+    };
+    try {
+        await vm.start(template.vm, template[step], name, extraEnv);
+    } catch (err) {
+        logger.error(`no se pudo lanzar ${name}: ${err.message}`);
+        if (podId) await api.updatePod(podId, {status: 'error', active: false});
+    }
+};
+
+/**
+ * Un pivote local puede tener varios loads pendientes: se corre una sola extracción por paso, con la
+ * unión de sus categorías (mismo criterio que el flujo GCP: un pod por retail y tipo).
  */
 const processPivot = async (pivotRetailId, loads) => {
     const launch = await api.getLaunch(pivotRetailId, 'POSITION');
@@ -54,26 +112,26 @@ const processPivot = async (pivotRetailId, loads) => {
 
     const template = templates[launch.retail_name];
     if (!template) {
-        logger.warn(`retail ${pivotRetailId}: no hay procesos para '${launch.retail_name}' en src/templates.js`);
+        logger.warn(`retail ${pivotRetailId}: no hay plantilla local para '${launch.retail_name}' en src/templates.js`);
         return;
     }
 
-    const position = await vm.getProcess(template.vm, template.POSITION.process);
-    if (!ranToday(position)) position.status = 'NOT_FOUND';
-    if (!isDone(pivotRetailId, template.POSITION.process, position)) return;
+    const running = loads.flatMap(load => Object.entries(load.categories ?? {}))
+        .filter(([, entry]) => entry?.status === 'RUNNING');
+    // pricing primero: tiene que correr el mismo día que el position que ya terminó
+    const needsPricing = running.some(([, entry]) => entry.position_status === 'OK' && entry.pricing_status !== 'OK');
+    const needsPosition = running.some(([, entry]) => entry.position_status !== 'OK');
+    const step = needsPricing ? 'PRICING' : needsPosition ? 'POSITION' : null;
+    if (!step) return;
 
-    const covered = loads.filter(load => hasRunningCategories(load) && new Date(load.created).getTime() < position.startedAt);
-    if (covered.length === 0) {
-        logger.info(`retail ${pivotRetailId}: ningún load pendiente es anterior al position de hoy`);
+    const pod = await api.getPendingPod(pivotRetailId, step);
+    if (pod) {
+        await checkPendingPod(template, pod, step, loads);
         return;
     }
-    for (const load of covered) await markOk(load, 'position_status');
 
-    const pricing = await vm.getProcess(template.vm, template.PRICING.process);
-    if (!ranToday(pricing) || pricing.startedAt < position.startedAt) pricing.status = 'NOT_FOUND';
-    if (!isDone(pivotRetailId, template.PRICING.process, pricing)) return;
-
-    for (const load of covered) await markOk(load, 'pricing_status');
+    const categoryIds = [...new Set(running.filter(([, entry]) => entry[STATUS_KEY[step]] !== 'OK').map(([id]) => id))];
+    await launchStep(pivotRetailId, launch, template, step, categoryIds);
 };
 
 const runCycle = async () => {
