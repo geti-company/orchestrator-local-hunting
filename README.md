@@ -49,11 +49,13 @@ Un **pivote local** es el que tiene su plantilla `POSITION` en `launchs` con `cl
 ```bash
 git clone https://github.com/geti-company/orchestrator-local-hunting.git
 cd orchestrator-local-hunting
-cp .env.example .env   # completar; o definir las variables en el entorno de la máquina
-set -a; . ./.env; set +a
+cp .env.example .env && chmod 600 .env   # completar
 pm2 start ecosystem.config.js
-pm2 save
 ```
+
+`ecosystem.config.js` lee el `.env` del repo, así que no hace falta cargarlo antes en la terminal (si una
+variable no está en el `.env`, se toma del entorno). `pm2 restart` **no** vuelve a leer el `.env`: después
+de cambiarlo, `pm2 delete orchestrator-local-hunting && pm2 start ecosystem.config.js`.
 
 `launch.js` queda corriendo y ejecuta un ciclo cada `LOOP_INTERVAL_MINUTES` (10); el siguiente ciclo parte
 cuando termina el anterior. Logs: `pm2 logs orchestrator-local-hunting`.
