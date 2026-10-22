@@ -45,8 +45,15 @@ module.exports = {
         firstOrNull((await request('GET', '/orchestrator/launch', {query: {retail_id: retailId, launch_type: launchType}}))?.data),
 
     // pod pendiente del retail y tipo (sin filtro de fecha: un pod puede cruzar la medianoche)
+    // `date` es obligatorio en el DTO de api-hunting aunque la consulta no filtra por él
     getPendingPod: async (retailId, launchType) =>
-        firstOrNull((await request('GET', '/orchestrator/pods', {query: {retail_id: retailId, launch_type: launchType, status: 'pending', active: true}}))?.data),
+        firstOrNull((await request('GET', '/orchestrator/pods', {query: {
+            date: new Date().toISOString().slice(0, 10),
+            retail_id: retailId,
+            launch_type: launchType,
+            status: 'pending',
+            active: true,
+        }}))?.data),
 
     registerPod: body => request('POST', '/orchestrator/pod-register', {body}),
 

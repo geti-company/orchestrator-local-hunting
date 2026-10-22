@@ -81,7 +81,8 @@ const launchStep = async (pivotRetailId, launch, template, step, categoryIds) =>
         name,
         active: true,
         cluster: `local-${template.vm}`,
-        zone: null,
+        // api-hunting exige zone como texto; los pods locales no tienen zona de GCP
+        zone: '',
         namespace: 'pm2',
         status: 'pending',
         launch_type: step,

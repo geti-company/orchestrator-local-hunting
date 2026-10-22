@@ -60,7 +60,7 @@ cuando termina el anterior. Logs: `pm2 logs orchestrator-local-hunting`.
 
 **Arranque automático:** el crontab del host 009 en el repo `crons` (`z-crontabs/009.host`) revisa cada
 10 minutos si la app está corriendo en pm2 y, si no (reinicio del equipo o detenida), la inicia desde
-`~/orchestrator-local-hunting` cargando su `.env`. Por eso el repo tiene que estar clonado en esa ruta.
+`~/Repositorios/orchestrator-local-hunting` cargando su `.env`. Por eso el repo tiene que estar clonado en esa ruta.
 
 Probar un ciclo a mano antes de dejarlo corriendo (**no es en seco**: si hay un load pendiente con pivote
 local, lanza el robot):
