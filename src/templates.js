@@ -1,36 +1,16 @@
 /**
- * Plantillas de los robots por pivote local, indexadas por `launchs.retail_name` de la plantilla
- * `local-*` del pivote. CLIENT_ID, FROM_HOURS y CATEGORIES los agrega el ciclo.
+ * Procesos que vigilar por pivote local, indexados por `launchs.retail_name` de la plantilla
+ * `local-*` del pivote. Los lanza crons (repo `crons`, crontab de la VM): este orquestador no
+ * lanza nada, solo lee su estado en pm2. `process` es el `name` de la app en el config de crons.
  *
- * Paris: copiado de orchestrator-local-deliverycategory (position-paris2_complete.js y
- * pricing-paris2_complete.js), que hoy corre Paris para otro cliente en la VM 009.1.
- * [VERIFICAR] VM y LOCAL para las corridas de hunting (cliente 412), y que robot-pricing-2 con
- * RETAIL=paris2 tome los productos que robot-position dejó con RETAIL=paris.
+ * Paris: crons corre position y add position con CLIENT_ID=412, RETAIL=paris y LOCAL=main
+ * (retail 40, el de las categorías del pivote), sin CATEGORIES: toman las categorías del 412
+ * vigentes ese día. La info extendida de Paris también la corre crons (product/paris.config.js).
  */
 module.exports = {
     paris: {
         vm: '009.1',
-        POSITION: {
-            args: '3',
-            env: {
-                RETAIL: 'paris',
-                LOCAL: '2_complete',
-                SKIP_CATEGORY_ERRORS: 'true',
-                MAX_ATTEMPTS: '10',
-                PAGE_CONCURRENCY: '1',
-            },
-        },
-        PRICING: {
-            args: '2',
-            env: {
-                RETAIL: 'paris2',
-                LOCAL: 'complete',
-                LAUNCH_TYPE: 'ADD_POSITION_EXTERNAL',
-                MAX_ATTEMPTS: '4',
-                CONCURRENCY: '5',
-                PAGE_CONCURRENCY: '1',
-                execute_cf: 'n',
-            },
-        },
+        POSITION: {process: 'robot-position-paris-to-hunting'},
+        PRICING: {process: 'add-position-external-paris-main-to-hunting'},
     },
 };
