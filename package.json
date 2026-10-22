@@ -1,7 +1,7 @@
 {
   "name": "orchestrator-local-hunting",
   "version": "0.1.0",
-  "description": "Orquestador local de hunting: corre robot-position y robot-pricing-2 en las VMs de la oficina para las cargas con pivote local y reporta los pods a api-hunting (PROJ-033).",
+  "description": "Orquestador local de hunting: corre robot-position y robot-pricing-2 en las VMs de la oficina para las cargas con pivote local y reporta los pods a api-hunting (PROJ-035).",
   "main": "launch.js",
   "private": true,
   "engines": {

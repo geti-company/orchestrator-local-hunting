@@ -2,10 +2,12 @@
  * Plantillas de los robots por pivote local, indexadas por `launchs.retail_name` de la plantilla
  * `local-*` del pivote. CLIENT_ID, FROM_HOURS y CATEGORIES los agrega el ciclo.
  *
- * Paris: copiado de orchestrator-local-deliverycategory (position-paris2_complete.js y
- * pricing-paris2_complete.js), que hoy corre Paris para otro cliente en la VM 009.1.
- * [VERIFICAR] VM y LOCAL para las corridas de hunting (cliente 412), y que robot-pricing-2 con
- * RETAIL=paris2 tome los productos que robot-position dejó con RETAIL=paris.
+ * Paris: mismos valores que las corridas diarias de Paris de crons
+ * (position-addpos/paris/paris-group1-position y addpos-paris-main-group): con LOCAL=main el robot
+ * resuelve el retail `paris`, que es el de las categorías del pivote. LOCAL=2_complete o sellers
+ * resuelven otros retails y no encontrarían esas categorías.
+ * La info extendida de Paris no va aquí: ya la corre crons cada hora (product/paris.config.js).
+ * [VERIFICAR] VM 009.1 para las corridas de hunting, pendiente de confirmar con operación.
  */
 module.exports = {
     paris: {
@@ -14,22 +16,23 @@ module.exports = {
             args: '3',
             env: {
                 RETAIL: 'paris',
-                LOCAL: '2_complete',
+                LOCAL: 'main',
                 SKIP_CATEGORY_ERRORS: 'true',
-                MAX_ATTEMPTS: '10',
+                MAX_ATTEMPTS: '7',
                 PAGE_CONCURRENCY: '1',
+                HEADLESS: 'true',
             },
         },
         PRICING: {
             args: '2',
             env: {
-                RETAIL: 'paris2',
-                LOCAL: 'complete',
+                RETAIL: 'paris',
+                LOCAL: 'main',
                 LAUNCH_TYPE: 'ADD_POSITION_EXTERNAL',
-                MAX_ATTEMPTS: '4',
-                CONCURRENCY: '5',
+                RETAIL_ID: '40',
+                MAX_ATTEMPTS: '3',
+                CONCURRENCY: '1',
                 PAGE_CONCURRENCY: '1',
-                execute_cf: 'n',
             },
         },
     },

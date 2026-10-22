@@ -1,6 +1,6 @@
 # orchestrator-local-hunting
 
-Orquestador local de **hunting** (PROJ-033). Corre robot-position y robot-pricing-2 en las VMs de la
+Orquestador local de **hunting** (PROJ-035). Corre robot-position y robot-pricing-2 en las VMs de la
 oficina para las cargas de hunting cuyo **pivote no se puede scrapear desde GCP** (hoy Paris), y
 reporta el estado de cada robot como pod en `db-hunting` vía `api-hunting`.
 
@@ -44,21 +44,25 @@ Un **pivote local** es el que tiene su plantilla `POSITION` en `launchs` con `cl
   `orchestrator-local-deliverycategory`.
 - Variables de entorno: ver `.env.example`. Nunca commitear `.env`.
 
-## Instalación con cron
+## Instalación (pm2 en el host, igual que delivery)
 
 ```bash
 git clone https://github.com/geti-company/orchestrator-local-hunting.git
 cd orchestrator-local-hunting
-cp .env.example .env   # completar
+cp .env.example .env   # completar; o definir las variables en el entorno de la máquina
+set -a; . ./.env; set +a
+pm2 start ecosystem.config.js
+pm2 save
 ```
 
-Ejemplo de crontab (cada 10 minutos en horario hábil; `flock` evita que dos ciclos se superpongan):
+`launch.js` queda corriendo y ejecuta un ciclo cada `LOOP_INTERVAL_MINUTES` (10); el siguiente ciclo parte
+cuando termina el anterior. Logs: `pm2 logs orchestrator-local-hunting`.
 
-```cron
-*/10 9-20 * * 1-5 cd /ruta/orchestrator-local-hunting && set -a && . ./.env && set +a && RUN_ONCE=true flock -n /tmp/orchestrator-local-hunting.lock node launch.js >> ~/orchestrator-local-hunting.log 2>&1
-```
+**Arranque automático:** el crontab del host 009 en el repo `crons` (`z-crontabs/009.host`) revisa cada
+10 minutos si la app está corriendo en pm2 y, si no (reinicio del equipo o detenida), la inicia desde
+`~/orchestrator-local-hunting` cargando su `.env`. Por eso el repo tiene que estar clonado en esa ruta.
 
-Probar un ciclo a mano antes de dejarlo en cron (**no es en seco**: si hay un load pendiente con pivote
+Probar un ciclo a mano antes de dejarlo corriendo (**no es en seco**: si hay un load pendiente con pivote
 local, lanza el robot):
 
 ```bash
@@ -67,7 +71,7 @@ set -a; . ./.env; set +a; RUN_ONCE=true node launch.js
 
 ## Depende de (PROJ-024)
 
-- **T-P024-O18:** `orchestrator-hunting` no lanza pods para plantillas `local-*` y lee su estado desde `pods`.
+- **T-P024-O18:** `orchestrator-hunting` no lanza pods para plantillas `local-*` y lee su estado desde `categories`, que marca este orquestador.
 - **T-P024-D06:** plantillas `POSITION` y `PRICING` de Paris en `launchs` con `cluster = local-paris`.
 - **T-P024-P08 / O16:** extensión de la vigencia de las categorías del cliente 412.
 
@@ -75,13 +79,17 @@ Sin O18, `orchestrator-hunting` seguiría intentando lanzar en GCP.
 
 ## Por verificar antes de producción
 
-- [ ] **VM y `LOCAL`** de Paris para las corridas de hunting (`src/templates.js` copia los valores de la corrida
-      de Paris de otro cliente en la VM 009.1).
-- [ ] Que robot-pricing-2 con `RETAIL=paris2` procese los productos que robot-position dejó con `RETAIL=paris`.
+- [x] **`RETAIL`/`LOCAL` de Paris:** `paris`/`main` en position y pricing (más `RETAIL_ID=40` en pricing), igual
+      que las corridas diarias de Paris en crons; es el retail de las categorías del pivote.
+- [ ] **VM:** `src/templates.js` usa la 009.1, pendiente de confirmar con operación.
+- [x] **Info extendida de Paris:** no la lanza este orquestador; ya la corre crons cada hora en la VM 009.4
+      (`product/paris.config.js`, `CLUSTER=local-paris`).
 - [ ] **Mismo día:** si position termina después de `END_TIME` o pasada la medianoche, pricing correría otro
       día y no encontraría nada (`ADD_POSITION_EXTERNAL` usa la fecha de hoy). Hay que definir cómo rehacer
       position en ese caso (`src/cycle.js`, TODO).
 - [ ] Forma exacta de la respuesta de `GET /orchestrator/pods` y `POST /orchestrator/pod-register`
       (`src/hunting-api.js` acepta `data` como arreglo u objeto).
-- [ ] Convivencia con la corrida diaria de Paris de otro cliente: como comparten `RETAIL`/`LOCAL`, la regla
-      de no lanzar encima hace esperar a la de hunting hasta que termine la otra.
+- [ ] Convivencia con la corrida diaria de Paris de otro cliente en la VM 009.1: usa otro `LOCAL` (`2_complete`),
+      así que la regla de no lanzar encima no las separa y pueden correr al mismo tiempo en la VM.
+- [ ] Que el auto-relaunch de crons (host 009) no intente relanzar los procesos `orch-hunt-*`, que no
+      vienen de un config de crons.
